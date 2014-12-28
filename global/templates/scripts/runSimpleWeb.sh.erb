@@ -1,0 +1,7 @@
+docker run -e CONFIG_LOCATION="<%= $local_directories[:local_config][:container] %>" \
+-v <%= $local_directories[:local_config][:vm] %>:<%= $local_directories[:local_config][:container] %> \
+-v <%= $global_directories[:projects][:vm] %>:<%= $global_directories[:projects][:container] %> \
+-p <%= web_port %>:<%= web_port %> \
+-d \
+simple-web \
+node "<%= $global_directories[:projects][:container] %>/index.js"

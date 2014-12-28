@@ -1,0 +1,155 @@
+# -*- mode: ruby -*-
+# # vi: set ft=ruby :
+
+require 'fileutils'
+require 'erb'
+require './util'
+
+Vagrant.require_version ">= 1.6.0"
+
+CLOUD_CONFIG_PATH = File.join(File.dirname(__FILE__), "user-data")
+CONFIG = File.join(File.dirname(__FILE__), "config.rb")
+
+#see http://ruby-log.blogspot.com/2013/03/generating-static-html-using-erb.html
+#box_config = get_template('box_config.erb')
+#run_simple_web = get_template('run_simple_web.erb')
+
+# Defaults for config options defined in CONFIG
+$num_instances = 1
+$update_channel = "alpha"
+$enable_serial_logging = false
+$vb_gui = false
+$vb_memory = 1024
+$vb_cpus = 1
+
+# Attempt to apply the deprecated environment variable NUM_INSTANCES to
+# $num_instances while allowing config.rb to override it
+if ENV["NUM_INSTANCES"].to_i > 0 && ENV["NUM_INSTANCES"]
+    $num_instances = ENV["NUM_INSTANCES"].to_i
+end
+
+if File.exist?(CONFIG)
+    require CONFIG
+end
+
+setup_project_directories()
+
+Vagrant.configure("2") do |config|
+    config.vm.box = "coreos-%s" % $update_channel
+    config.vm.box_version = ">= 308.0.1"
+    config.vm.box_url = "http://%s.release.core-os.net/amd64-usr/current/coreos_production_vagrant.json" % $update_channel
+
+    config.vm.provider :vmware_fusion do |vb, override|
+        override.vm.box_url = "http://%s.release.core-os.net/amd64-usr/current/coreos_production_vagrant_vmware_fusion.json" % $update_channel
+    end
+
+    config.vm.provider :virtualbox do |v|
+        # On VirtualBox, we don't have guest additions or a functional vboxsf
+        # in CoreOS, so tell Vagrant that so it can be smarter.
+        v.check_guest_additions = false
+        v.functional_vboxsf     = false
+    end
+
+    # plugin conflict
+    if Vagrant.has_plugin?("vagrant-vbguest") then
+        config.vbguest.auto_update = false
+    end
+
+    (1..$num_instances).each do |i|
+        config.vm.define vm_name = "core-%02d" % i do |config|
+            config.vm.hostname = vm_name
+
+            setup_machine_directories(vm_name)
+
+            if $enable_serial_logging
+                logdir = File.join(File.dirname(__FILE__), "log")
+                FileUtils.mkdir_p(logdir)
+
+                serialFile = File.join(logdir, "%s-serial.txt" % vm_name)
+                FileUtils.touch(serialFile)
+
+                config.vm.provider :vmware_fusion do |v, override|
+                    v.vmx["serial0.present"] = "TRUE"
+                    v.vmx["serial0.fileType"] = "file"
+                    v.vmx["serial0.fileName"] = serialFile
+                    v.vmx["serial0.tryNoRxLoss"] = "FALSE"
+                end
+
+                config.vm.provider :virtualbox do |vb, override|
+                    vb.customize ["modifyvm", :id, "--uart1", "0x3F8", "4"]
+                    vb.customize ["modifyvm", :id, "--uartmode1", serialFile]
+                end
+            end
+
+            if $expose_docker_tcp
+                config.vm.network "forwarded_port", guest: 2375, host: ($expose_docker_tcp + i - 1), auto_correct: true
+            end
+
+            config.vm.provider :vmware_fusion do |vb|
+                vb.gui = $vb_gui
+            end
+
+            config.vm.provider :virtualbox do |vb|
+                vb.gui = $vb_gui
+                vb.memory = $vb_memory
+                vb.cpus = $vb_cpus
+            end
+
+            ip = "172.17.8.#{i+100}"
+            config.vm.network :private_network, ip: ip
+
+            web_port = 8080 + i
+            config.vm.network :forwarded_port, guest: web_port, :host => web_port
+
+            setup_machine_directories(vm_name)
+
+            setup_host_global_shares(config,i)
+            setup_host_local_shares(config,vm_name,i)
+
+=begin
+            File.open(File.join(get_local_share(vm_name),'box_config.json'),'w') do |f1|
+                f1.puts box_config.result(binding)
+                #example of writing file directly to vm file system without going through share
+                #config.vm.provision :shell, :inline => "echo '#{box_config.result(binding)}' > cfg.json"
+            end
+
+            File.open(File.join(get_local_share(vm_name),'run_simple_web.sh'),'w') do |f2|
+                f2.puts run_simple_web.result(binding)
+            end
+=end
+
+            #write erb templates for configs
+            Dir["#{$global_directories[:templates_config][:host]}/**/*.erb"].each { |f|
+                config_template_name = File.basename(f)
+                config_template = ERB.new(File.read(f))
+
+                machine_dir = $local_directories[:local_config][:host].call(vm_name)
+                File.open(File.join(machine_dir,config_template_name.gsub('.erb','')),'w') do |f1|
+                    f1.puts config_template.result(binding)
+                end
+            }
+
+            #write erb templates for scripts
+            Dir["#{$global_directories[:templates_scripts][:host]}/**/*.erb"].each { |f|
+                config_template_name = File.basename(f)
+                config_template = ERB.new(File.read(f))
+
+                machine_dir = $local_directories[:local_scripts][:host].call(vm_name)
+                File.open(File.join(machine_dir,config_template_name.gsub('.erb','')),'w') do |f1|
+                    f1.puts config_template.result(binding)
+                end
+            }
+
+            if File.exist?(CLOUD_CONFIG_PATH)
+                config.vm.provision :file, :source => "#{CLOUD_CONFIG_PATH}", :destination => "/tmp/vagrantfile-user-data"
+                config.vm.provision :shell, :inline => "mv /tmp/vagrantfile-user-data /var/lib/coreos-vagrant/", :privileged => true
+            end
+
+            Dir["#{$global_directories[:import_containers][:host]}/**/*.tar"].each { |f|
+                tar_name = File.basename(f)
+                config.vm.provision :shell, :inline => "docker load -i #{$global_directories[:import_containers][:vm]}/#{tar_name}"
+            }
+
+        end
+    end
+end

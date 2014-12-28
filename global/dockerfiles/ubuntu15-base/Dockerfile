@@ -1,0 +1,3 @@
+# DOCKER-VERSION 0.10.0
+
+FROM ubuntu:15.04

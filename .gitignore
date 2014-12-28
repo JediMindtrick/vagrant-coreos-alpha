@@ -26,3 +26,19 @@ node_modules
 
 # Users Environment Variables
 .lock-wscript
+
+global/secrets
+global/exportContainers
+global/importContainers
+share/global/exportContainers/
+share/global/importContainers/
+
+.vagrant/
+
+data
+data/
+projects/
+secrets/
+exportContainers/
+importContainers/
+local/
