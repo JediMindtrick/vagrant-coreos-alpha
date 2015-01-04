@@ -1,8 +1,3 @@
-hyperloop-deux
-==============
-
-More "cloudy" hyperloop
-
 Project Structure
 =================
 RATIONALE:
